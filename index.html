@@ -3,15 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>簡易マイクラ - 画面振動バグ完全修正版</title>
+    <title>簡易マイクラ - インベントリ実装版</title>
     <style>
-        body { margin: 0; overflow: hidden; font-family: sans-serif; background-color: #87CEEB; }
+        body { margin: 0; overflow: hidden; font-family: 'Helvetica Neue', Arial, sans-serif; background-color: #87CEEB; user-select: none; }
         #ui {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
             text-align: center; color: white;
-            background: rgba(0,0,0,0.7); padding: 30px;
+            background: rgba(0,0,0,0.85); padding: 30px;
             cursor: pointer; border-radius: 10px; z-index: 10;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         }
         #crosshair {
             position: absolute; top: 50%; left: 50%;
@@ -24,11 +25,54 @@
         }
         #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; }
         #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; }
+        
         #seed-display {
             position: absolute; top: 10px; left: 10px;
-            color: white; background: rgba(0,0,0,0.5);
-            padding: 10px; border-radius: 5px; font-size: 14px;
-            pointer-events: none; display: none;
+            color: #aaa; background: rgba(0,0,0,0.6);
+            padding: 8px 12px; border-radius: 4px; font-size: 13px;
+            pointer-events: none; display: none; font-weight: bold;
+        }
+
+        /* --- インベントリ（ホットバー）UI --- */
+        #hotbar {
+            position: absolute; bottom: 20px; left: 50%;
+            transform: translateX(-50%);
+            display: none; background: rgba(40, 40, 40, 0.85);
+            padding: 6px; border-radius: 6px; border: 4px solid #111;
+            z-index: 20; gap: 6px;
+        }
+        .slot {
+            width: 50px; height: 50px;
+            background: #8b8b8b; border: 4px solid #373737;
+            border-top-color: #fff; border-left-color: #fff; /* 立体感を出すマイクラスタイル */
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; position: relative;
+        }
+        .slot:hover { background: #9c9c9c; }
+        .slot.active {
+            border: 4px solid #fffb00; /* 選択中の黄色枠 */
+        }
+        .slot-icon {
+            width: 36px; height: 36px;
+            border-radius: 4px;
+        }
+        /* アイテム固有の色（テクスチャの代わり） */
+        .icon-grass { background: linear-gradient(135deg, #5b8731, #3c5e1e); }
+        .icon-dirt { background: linear-gradient(135deg, #866043, #573d2a); }
+        .icon-stone { background: linear-gradient(135deg, #737373, #4a4a4a); }
+        .icon-wood { background: linear-gradient(135deg, #a07646, #6b4e2d); }
+        .icon-leaf { background: linear-gradient(135deg, #2b5c2b, #193d19); }
+
+        .slot-label {
+            position: absolute; bottom: 2px; right: 4px;
+            color: white; font-size: 10px; font-weight: bold;
+            text-shadow: 1px 1px 2px black; pointer-events: none;
+        }
+        #inventory-hint {
+            position: absolute; bottom: 90px; left: 50%;
+            transform: translateX(-50%); color: #fff;
+            background: rgba(0,0,0,0.6); padding: 6px 12px;
+            border-radius: 4px; font-size: 12px; display: none; pointer-events: none;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -36,10 +80,20 @@
 <body>
     <div id="ui">
         <h2>クリックして世界を生成</h2>
-        <p>W,A,S,D：移動 / SPACE：ジャンプ<br>マウス：視点移動<br>左クリック：ブロック設置 / 右クリック：破壊</p>
+        <p>W,A,S,D：移動 / SPACE：ジャンプ<br>マウス：視点移動 / 『E』キー：インベントリ開閉<br>左クリック：ブロック設置 / 右クリック：破壊</p>
     </div>
     <div id="crosshair"></div>
     <div id="seed-display">SEED: <span id="seed-val"></span></div>
+    
+    <!-- ホットバー -->
+    <div id="hotbar">
+        <div class="slot active" data-block="grass"><div class="slot-icon icon-grass"></div><span class="slot-label">草</span></div>
+        <div class="slot" data-block="dirt"><div class="slot-icon icon-dirt"></div><span class="slot-label">土</span></div>
+        <div class="slot" data-block="stone"><div class="slot-icon icon-stone"></div><span class="slot-label">石</span></div>
+        <div class="slot" data-block="wood"><div class="slot-icon icon-wood"></div><span class="slot-label">木</span></div>
+        <div class="slot" data-block="leaf"><div class="slot-icon icon-leaf"></div><span class="slot-label">葉</span></div>
+    </div>
+    <div id="inventory-hint">『E』キーでインベントリを閉じて視点を固定します</div>
 
     <script>
         // --- 1. シード値付きノイズ関数 ---
@@ -66,27 +120,41 @@
             return Math.floor(height);
         }
 
-        // --- コントロールクラス ---
+        // --- コントロールクラス（インベントリ対応） ---
         class SimpleControls {
             constructor(camera, element) {
                 this.camera = camera; this.element = element; this.isLocked = false;
                 this.pitchObject = new THREE.Object3D(); this.pitchObject.add(camera);
                 this.yawObject = new THREE.Object3D(); this.yawObject.add(this.pitchObject);
                 document.addEventListener('mousemove', (e) => this.onMouseMove(e));
-                element.addEventListener('click', () => this.lock());
+                element.addEventListener('click', (e) => {
+                    // UIやホットバーをクリックした時はポインターロックを発動させない
+                    if(e.target.closest('#hotbar') || e.target.closest('#ui')) return;
+                    if(!this.isLocked) this.lock();
+                });
                 document.addEventListener('pointerlockchange', () => this.onPointerLockChange());
             }
             getObject() { return this.yawObject; }
             lock() { this.element.requestPointerLock(); }
+            unlock() { document.exitPointerLock(); }
             onPointerLockChange() {
                 this.isLocked = document.pointerLockElement === this.element;
                 const ui = document.getElementById('ui');
                 const crosshair = document.getElementById('crosshair');
                 const seedDisp = document.getElementById('seed-display');
+                const hotbar = document.getElementById('hotbar');
+                const invHint = document.getElementById('inventory-hint');
+
                 if (this.isLocked) {
-                    ui.style.display = 'none'; crosshair.style.display = 'block'; seedDisp.style.display = 'block';
+                    ui.style.display = 'none'; crosshair.style.display = 'block'; 
+                    seedDisp.style.display = 'block'; hotbar.style.display = 'flex';
+                    invHint.style.display = 'none';
                 } else {
-                    ui.style.display = 'block'; crosshair.style.display = 'none'; seedDisp.style.display = 'none';
+                    // ポインターロックが外れた時、初期UIが表示されていなければインベントリ解放状態にする
+                    if(ui.style.display === 'none') {
+                        invHint.style.display = 'block';
+                    }
+                    crosshair.style.display = 'none';
                 }
             }
             onMouseMove(e) {
@@ -116,7 +184,7 @@
         scene.add(player);
         camera.position.y = 1.6;
 
-        // --- テクスチャ生成 ---
+        // --- 各種ブロックのプロシージャルテクスチャ生成 ---
         function createDataTexture(pixels, width, height) {
             const data = new Uint8Array(pixels);
             const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
@@ -124,10 +192,14 @@
             texture.generateMipmaps = false; texture.needsUpdate = true;
             return texture;
         }
+        
+        // 草トップ
         const grassTopPixels = []; for (let i = 0; i < 16 * 16; i++) { const c = 90 + Math.random() * 50; grassTopPixels.push(c * 0.6, c, c * 0.4, 255); }
         const grassTopTexture = createDataTexture(grassTopPixels, 16, 16);
+        // 土
         const dirtPixels = []; for (let i = 0; i < 16 * 16; i++) { const c = 100 + Math.random() * 40; dirtPixels.push(c, c * 0.7, c * 0.4, 255); }
         const dirtTexture = createDataTexture(dirtPixels, 16, 16);
+        // 草サイド
         const grassSidePixels = [];
         for (let y = 0; y < 16; y++) {
             for (let x = 0; x < 16; x++) {
@@ -136,6 +208,40 @@
             }
         }
         const grassSideTexture = createDataTexture(grassSidePixels, 16, 16);
+        // 石
+        const stonePixels = []; for (let i = 0; i < 16 * 16; i++) { const c = 100 + Math.random() * 30; stonePixels.push(c, c, c, 255); }
+        const stoneTexture = createDataTexture(stonePixels, 16, 16);
+        // 木（原木側面）
+        const woodPixels = []; for (let i = 0; i < 16 * 16; i++) { const c = 90 + Math.random() * 20; woodPixels.push(c, c * 0.65, c * 0.4, 255); }
+        const woodTexture = createDataTexture(woodPixels, 16, 16);
+        // 葉
+        const leafPixels = []; for (let i = 0; i < 16 * 16; i++) { const c = 60 + Math.random() * 40; leafPixels.push(c * 0.2, c * 0.8, c * 0.2, 255); }
+        const leafTexture = createDataTexture(leafPixels, 16, 16);
+
+        // --- マテリアル定義 ---
+        const materials = {
+            grass: [
+                new THREE.MeshLambertMaterial({ map: grassSideTexture }), new THREE.MeshLambertMaterial({ map: grassSideTexture }),
+                new THREE.MeshLambertMaterial({ map: grassTopTexture }), new THREE.MeshLambertMaterial({ map: dirtTexture }),
+                new THREE.MeshLambertMaterial({ map: grassSideTexture }), new THREE.MeshLambertMaterial({ map: grassSideTexture })
+            ],
+            dirt: Array(6).fill(new THREE.MeshLambertMaterial({ map: dirtTexture })),
+            stone: Array(6).fill(new THREE.MeshLambertMaterial({ map: stoneTexture })),
+            wood: Array(6).fill(new THREE.MeshLambertMaterial({ map: woodTexture })),
+            leaf: Array(6).fill(new THREE.MeshLambertMaterial({ map: leafTexture, transparent: true, alphaTest: 0.5 }))
+        };
+
+        // 現在選択中のブロック
+        let currentSelectedBlock = 'grass';
+
+        // UIからアイテムを選択したときの処理
+        document.querySelectorAll('.slot').forEach(slot => {
+            slot.addEventListener('click', (e) => {
+                document.querySelectorAll('.slot').forEach(s => s.classList.remove('active'));
+                slot.classList.add('active');
+                currentSelectedBlock = slot.getAttribute('data-block');
+            });
+        });
 
         // --- 光の設定 ---
         const light = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -145,17 +251,11 @@
 
         // --- 無限チャンク生成システム ---
         const blockGeo = new THREE.BoxGeometry(1, 1, 1);
-        const grassBlockMaterials = [
-            new THREE.MeshLambertMaterial({ map: grassSideTexture }), new THREE.MeshLambertMaterial({ map: grassSideTexture }),
-            new THREE.MeshLambertMaterial({ map: grassTopTexture }), new THREE.MeshLambertMaterial({ map: dirtTexture }),
-            new THREE.MeshLambertMaterial({ map: grassSideTexture }), new THREE.MeshLambertMaterial({ map: grassSideTexture })
-        ];
 
         const CHUNK_SIZE = 8;
         const RENDER_DISTANCE = 3;
         const activeBlocks = {};
         const chunks = {};
-        const objects = [];
         const interactableObjects = [];
 
         function generateChunk(cx, cz) {
@@ -169,7 +269,8 @@
                     const worldZ = cz * CHUNK_SIZE + z;
                     const height = getHeight(worldX, worldZ);
 
-                    const voxel = new THREE.Mesh(blockGeo, grassBlockMaterials);
+                    // 地形生成時はデフォルトで草ブロックを配置
+                    const voxel = new THREE.Mesh(blockGeo, materials.grass);
                     voxel.position.set(worldX + 0.5, height + 0.5, worldZ + 0.5);
                     scene.add(voxel);
 
@@ -177,7 +278,6 @@
                     activeBlocks[blockKey] = voxel;
                     
                     chunks[chunkKey].push(voxel);
-                    objects.push(voxel);
                     interactableObjects.push(voxel);
                 }
             }
@@ -190,13 +290,11 @@
                 scene.remove(voxel);
                 const blockKey = `${Math.floor(voxel.position.x)},${Math.floor(voxel.position.y)},${Math.floor(voxel.position.z)}`;
                 delete activeBlocks[blockKey];
-                const objIdx = objects.indexOf(voxel); if (objIdx > -1) objects.splice(objIdx, 1);
                 const intIdx = interactableObjects.indexOf(voxel); if (intIdx > -1) interactableObjects.splice(intIdx, 1);
             });
             delete chunks[chunkKey];
         }
 
-        // プレイヤーの動きに合わせて周辺の地形のみを作る
         function updateChunks() {
             const playerChunkX = Math.floor(player.position.x / CHUNK_SIZE);
             const playerChunkZ = Math.floor(player.position.z / CHUNK_SIZE);
@@ -218,26 +316,26 @@
         const mouse = new THREE.Vector2(0, 0);
 
         document.addEventListener('mousedown', (event) => {
+            // インベントリ解放中（ポインターロックが外れている時）は設置・破壊を行わない
             if (!controls.isLocked) return;
+            
             raycaster.setFromCamera(mouse, camera);
             const intersects = raycaster.intersectObjects(interactableObjects);
 
             if (intersects.length > 0) {
                 const intersect = intersects[0];
-                if (event.button === 0) {
-                    const voxel = new THREE.Mesh(blockGeo, grassBlockMaterials);
+                if (event.button === 0) { // 左クリック：選択中のブロックを設置
+                    const voxel = new THREE.Mesh(blockGeo, materials[currentSelectedBlock]);
                     voxel.position.copy(intersect.point).add(intersect.face.normal);
                     voxel.position.divideScalar(1).floor().multiplyScalar(1).addScalar(0.5);
                     scene.add(voxel);
                     const blockKey = `${Math.floor(voxel.position.x)},${Math.floor(voxel.position.y)},${Math.floor(voxel.position.z)}`;
                     activeBlocks[blockKey] = voxel;
-                    objects.push(voxel);
                     interactableObjects.push(voxel);
-                } else if (event.button === 2) {
+                } else if (event.button === 2) { // 右クリック：破壊
                     scene.remove(intersect.object);
                     const blockKey = `${Math.floor(intersect.object.position.x)},${Math.floor(intersect.object.position.y)},${Math.floor(intersect.object.position.z)}`;
                     delete activeBlocks[blockKey];
-                    objects.splice(objects.indexOf(intersect.object), 1);
                     interactableObjects.splice(interactableObjects.indexOf(intersect.object), 1);
                 }
             }
@@ -252,7 +350,24 @@
         const playerRadius = 0.3;
         const playerHeight = 1.8;
 
+        // キーボード入力（Eキーのトグル処理追加）
         document.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyE') {
+                const ui = document.getElementById('ui');
+                // ゲーム開始前のUIが開いている時はEキーを無視
+                if(ui.style.display !== 'none') return; 
+
+                if (controls.isLocked) {
+                    controls.unlock(); // ポインターを解放してインベントリを操作可能に
+                } else {
+                    controls.lock(); // 再びゲーム画面にロック
+                }
+                return;
+            }
+
+            // インベントリが開いている時は移動キーを入力を無視
+            if (!controls.isLocked) return;
+
             switch(e.code) {
                 case 'KeyW': moveForward = true; break;
                 case 'KeyA': moveLeft = true; break;
@@ -261,6 +376,7 @@
                 case 'Space': if (canJump) { velocity.y = 11; canJump = false; } break;
             }
         });
+        
         document.addEventListener('keyup', (e) => {
             switch(e.code) {
                 case 'KeyW': moveForward = false; break;
@@ -270,7 +386,6 @@
             }
         });
 
-        // 衝突判定関数
         function checkCollisionAt(pos) {
             const minX = Math.floor(pos.x - playerRadius);
             const maxX = Math.floor(pos.x + playerRadius);
@@ -296,12 +411,15 @@
         function animate() {
             requestAnimationFrame(animate);
             const time = performance.now();
+            const delta = Math.min((time - prevTime) / 1000, 0.1);
+
+            // インベントリが開いていても世界の描画やチャンク読み込みは維持
+            if (document.getElementById('ui').style.display === 'none') {
+                updateChunks();
+                document.getElementById('hotbar').style.display = 'flex';
+            }
             
             if (controls.isLocked) {
-                const delta = Math.min((time - prevTime) / 1000, 0.1);
-
-                updateChunks();
-
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
 
@@ -326,10 +444,9 @@
                     velocity.z -= velocity.z * 10.0 * delta;
                 }
 
-                // 重力計算
                 velocity.y -= 32.0 * delta;
 
-                // 1. X方向の移動・判定
+                // X軸移動
                 const targetPos = player.position.clone();
                 targetPos.x += velocity.x * delta;
                 if (!checkCollisionAt(targetPos)) {
@@ -338,7 +455,7 @@
                     velocity.x = 0;
                 }
 
-                // 2. Z方向の移動・判定
+                // Z軸移動
                 targetPos.copy(player.position);
                 targetPos.z += velocity.z * delta;
                 if (!checkCollisionAt(targetPos)) {
@@ -347,24 +464,18 @@
                     velocity.z = 0;
                 }
 
-                // 3. 【バグ修正】Y方向の移動とブレのない接地処理
+                // Y軸移動
                 player.position.y += velocity.y * delta;
-                
                 if (checkCollisionAt(player.position)) {
                     if (velocity.y < 0) {
-                        // 落下中にめり込んだら、ブロックの真上の位置にピタッと押し戻す
-                        player.position.y = Math.floor(player.position.y) + 1;
-                        // めり込み判定から完全に脱出させるため、ごくわずかに浮かす（これがブレ防止の肝）
-                        player.position.y += 0.001; 
+                        player.position.y = Math.floor(player.position.y) + 1 + 0.001; 
                         velocity.y = 0;
                         canJump = true;
                     } else if (velocity.y > 0) {
-                        // 天井にぶつかったら
                         player.position.y = Math.floor(player.position.y);
                         velocity.y = 0;
                     }
                 } else {
-                    // 空中にいる場合、すぐ足元（0.01マス下）をスキャンして接地フラグを維持（フカフカしたブレを防ぐ）
                     const downPos = player.position.clone();
                     downPos.y -= 0.01;
                     if (checkCollisionAt(downPos) && velocity.y <= 0) {
@@ -380,7 +491,7 @@
                     velocity.set(0, 0, 0);
                 }
 
-                // ボビング振動（接地時のみ）
+                // ボビング
                 if (isMoving && canJump) {
                     bobbingTimer += delta * 14;
                     camera.position.y = 1.6 + Math.sin(bobbingTimer) * 0.04;
@@ -389,6 +500,21 @@
                     camera.position.y += (1.6 - camera.position.y) * 0.2;
                     camera.position.x += (0 - camera.position.x) * 0.2;
                     if (!canJump) bobbingTimer = 0;
+                }
+            } else {
+                // インベントリが開いている時は慣性で止まる
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+                velocity.y -= 32.0 * delta;
+
+                // Y軸の衝突判定だけはインベントリ中も継続（落下して着地できるように）
+                player.position.y += velocity.y * delta;
+                if (checkCollisionAt(player.position)) {
+                    if (velocity.y < 0) {
+                        player.position.y = Math.floor(player.position.y) + 1 + 0.001;
+                        velocity.y = 0;
+                        canJump = true;
+                    }
                 }
             }
 
