@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>簡易マイクラ - 無限地形生成版</title>
+    <title>簡易マイクラ - 視点移動バグ完全修正版</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: sans-serif; background-color: #87CEEB; }
         #ui {
@@ -24,7 +24,6 @@
         }
         #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; }
         #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; }
-        /* シード値表示用UI */
         #seed-display {
             position: absolute; top: 10px; left: 10px;
             color: white; background: rgba(0,0,0,0.5);
@@ -43,44 +42,31 @@
     <div id="seed-display">SEED: <span id="seed-val"></span></div>
 
     <script>
-        // --- 1. シード値付きノイズ関数（簡易版二次元ノイズ） ---
-        // 本家のパーリンノイズの代わりに、シード値から滑らかな山を作る数式です
-        const SEED = Math.floor(Math.random() * 99999); // ランダムなシード値
+        // --- 1. シード値付きノイズ関数 ---
+        const SEED = Math.floor(Math.random() * 99999);
         document.getElementById('seed-val').innerText = SEED;
 
         function rawNoise(x, z) {
-            // シード値と座標を混ぜてランダムな値を出す数式
             const X = Math.sin(x * 12.9898 + z * 78.233 + SEED) * 43758.5453123;
             return X - Math.floor(X);
         }
 
-        // 周囲の点を補間して滑らかな坂を作る（バイリニア補間）
         function smoothNoise(x, z) {
-            const ix = Math.floor(x);
-            const iz = Math.floor(z);
-            const fx = x - ix;
-            const fz = z - iz;
-
-            const a = rawNoise(ix, iz);
-            const b = rawNoise(ix + 1, iz);
-            const c = rawNoise(ix, iz + 1);
-            const d = rawNoise(ix + 1, iz + 1);
-
-            const ux = fx * fx * (3.0 - 2.0 * fx);
-            const uz = fz * fz * (3.0 - 2.0 * fz);
-
+            const ix = Math.floor(x); const iz = Math.floor(z);
+            const fx = x - ix; const fz = z - iz;
+            const a = rawNoise(ix, iz); const b = rawNoise(ix + 1, iz);
+            const c = rawNoise(ix, iz + 1); const d = rawNoise(ix + 1, iz + 1);
+            const ux = fx * fx * (3.0 - 2.0 * fx); const uz = fz * fz * (3.0 - 2.0 * fz);
             return THREE.MathUtils.lerp(THREE.MathUtils.lerp(a, b, ux), THREE.MathUtils.lerp(c, d, ux), uz);
         }
 
-        // 複数の波を重ねてリアルな山にする（FBM）
         function getHeight(x, z) {
-            // ここで地形の起伏の激しさを調整できます
-            let height = smoothNoise(x * 0.05, z * 0.05) * 8; // 大きな山
-            height += smoothNoise(x * 0.2, z * 0.2) * 2;       // 細かな凸凹
+            let height = smoothNoise(x * 0.05, z * 0.05) * 8;
+            height += smoothNoise(x * 0.2, z * 0.2) * 2;
             return Math.floor(height);
         }
 
-        // --- コントロールクラス（前回同様） ---
+        // --- コントロールクラス ---
         class SimpleControls {
             constructor(camera, element) {
                 this.camera = camera; this.element = element; this.isLocked = false;
@@ -109,14 +95,12 @@
                 this.pitchObject.rotation.x -= (e.movementY || 0) * 0.002;
                 this.pitchObject.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitchObject.rotation.x));
             }
-            moveRight(distance) { this.yawObject.translateX(distance); }
-            moveForward(distance) { this.yawObject.translateZ(-distance); }
         }
 
         // --- 基本設定 ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
-        scene.fog = new THREE.Fog(0x87CEEB, 15, 45); // 霧を濃くして遠くの描写限界を隠す
+        scene.fog = new THREE.Fog(0x87CEEB, 15, 45);
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -127,9 +111,8 @@
         const controls = new SimpleControls(camera, document.body);
         const player = controls.getObject();
         
-        // 最初のスポン地点のY座標をノイズから計算
         const spawnH = getHeight(0, 0);
-        player.position.set(0, spawnH + 5, 0); // 地形より少し高い空中にスポン
+        player.position.set(0, spawnH + 5, 0);
         scene.add(player);
         camera.position.y = 1.6;
 
@@ -160,7 +143,7 @@
         scene.add(light);
         scene.add(new THREE.AmbientLight(0x808080));
 
-        // --- 【大幅新規】無限チャンク生成システム ---
+        // --- 無限チャンク生成システム ---
         const blockGeo = new THREE.BoxGeometry(1, 1, 1);
         const grassBlockMaterials = [
             new THREE.MeshLambertMaterial({ map: grassSideTexture }), new THREE.MeshLambertMaterial({ map: grassSideTexture }),
@@ -168,18 +151,16 @@
             new THREE.MeshLambertMaterial({ map: grassSideTexture }), new THREE.MeshLambertMaterial({ map: grassSideTexture })
         ];
 
-        const CHUNK_SIZE = 8; // 1つのチャンクの大きさ（重くならないように8x8に最適化）
-        const RENDER_DISTANCE = 3; // プレイヤーの周囲何チャンクまで生成するか
-        const activeBlocks = {}; // 存在するブロックを座標文字列キーで管理
-        const chunks = {}; // 生成済みチャンクの管理
-        const objects = []; // 衝突判定リスト
-        const interactableObjects = []; // クリック判定リスト
+        const CHUNK_SIZE = 8;
+        const RENDER_DISTANCE = 3;
+        const activeBlocks = {};
+        const chunks = {};
+        const objects = [];
+        const interactableObjects = [];
 
-        // 特定のチャンク（cx, cz）の地形を生成する関数
         function generateChunk(cx, cz) {
             const chunkKey = `${cx},${cz}`;
-            if (chunks[chunkKey]) return; // 既に生成されていればスキップ
-
+            if (chunks[chunkKey]) return;
             chunks[chunkKey] = [];
 
             for (let x = 0; x < CHUNK_SIZE; x++) {
@@ -188,7 +169,6 @@
                     const worldZ = cz * CHUNK_SIZE + z;
                     const height = getHeight(worldX, worldZ);
 
-                    // 表面に草ブロックを配置
                     const voxel = new THREE.Mesh(blockGeo, grassBlockMaterials);
                     voxel.position.set(worldX + 0.5, height + 0.5, worldZ + 0.5);
                     scene.add(voxel);
@@ -203,35 +183,27 @@
             }
         }
 
-        // 遠くの不要なチャンクを削除して軽くする関数
         function deleteChunk(cx, cz) {
             const chunkKey = `${cx},${cz}`;
             if (!chunks[chunkKey]) return;
-
             chunks[chunkKey].forEach(voxel => {
                 scene.remove(voxel);
                 const blockKey = `${Math.floor(voxel.position.x)},${Math.floor(voxel.position.y)},${Math.floor(voxel.position.z)}`;
                 delete activeBlocks[blockKey];
-                
                 const objIdx = objects.indexOf(voxel); if (objIdx > -1) objects.splice(objIdx, 1);
                 const intIdx = interactableObjects.indexOf(voxel); if (intIdx > -1) interactableObjects.splice(intIdx, 1);
             });
             delete chunks[chunkKey];
         }
 
-        // プレイヤーの位置に応じて周囲のチャンクを管理
         function updateChunks() {
             const playerChunkX = Math.floor(player.position.x / CHUNK_SIZE);
             const playerChunkZ = Math.floor(player.position.z / CHUNK_SIZE);
-
-            // 周囲のチャンクを生成
             for (let x = -RENDER_DISTANCE; x <= RENDER_DISTANCE; x++) {
                 for (let z = -RENDER_DISTANCE; z <= RENDER_DISTANCE; z++) {
                     generateChunk(playerChunkX + x, playerChunkZ + z);
                 }
             }
-
-            // 遠すぎるチャンクを削除
             for (const key in chunks) {
                 const [cx, cz] = key.split(',').map(Number);
                 if (Math.abs(cx - playerChunkX) > RENDER_DISTANCE + 1 || Math.abs(cz - playerChunkZ) > RENDER_DISTANCE + 1) {
@@ -240,7 +212,7 @@
             }
         }
 
-        // --- ブロック設置・破壊（無限地形対応版） ---
+        // --- ブロック設置・破壊 ---
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2(0, 0);
 
@@ -251,22 +223,19 @@
 
             if (intersects.length > 0) {
                 const intersect = intersects[0];
-                if (event.button === 0) { // 設置
+                if (event.button === 0) {
                     const voxel = new THREE.Mesh(blockGeo, grassBlockMaterials);
                     voxel.position.copy(intersect.point).add(intersect.face.normal);
                     voxel.position.divideScalar(1).floor().multiplyScalar(1).addScalar(0.5);
                     scene.add(voxel);
-
                     const blockKey = `${Math.floor(voxel.position.x)},${Math.floor(voxel.position.y)},${Math.floor(voxel.position.z)}`;
                     activeBlocks[blockKey] = voxel;
-
                     objects.push(voxel);
                     interactableObjects.push(voxel);
-                } else if (event.button === 2) { // 破壊
+                } else if (event.button === 2) {
                     scene.remove(intersect.object);
                     const blockKey = `${Math.floor(intersect.object.position.x)},${Math.floor(intersect.object.position.y)},${Math.floor(intersect.object.position.z)}`;
                     delete activeBlocks[blockKey];
-
                     objects.splice(objects.indexOf(intersect.object), 1);
                     interactableObjects.splice(interactableObjects.indexOf(intersect.object), 1);
                 }
@@ -279,7 +248,7 @@
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
         let canJump = false; let isMoving = false;
 
-        const playerRadius = 0.4;
+        const playerRadius = 0.3;
         const playerHeight = 1.8;
 
         document.addEventListener('keydown', (e) => {
@@ -288,7 +257,7 @@
                 case 'KeyA': moveLeft = true; break;
                 case 'KeyS': moveBackward = true; break;
                 case 'KeyD': moveRight = true; break;
-                case 'Space': if (canJump) velocity.y += 12; canJump = false; break;
+                case 'Space': if (canJump) { velocity.y = 11; canJump = false; } break;
             }
         });
         document.addEventListener('keyup', (e) => {
@@ -300,15 +269,11 @@
             }
         });
 
-        // 【最適化】配列総当たりの衝突判定だと無限世界では重すぎるため、座標キー検索に変更！
-        function checkCollision(pos) {
-            // 最下層より下
-            if (pos.y < -20) return true;
-
+        function checkCollisionAt(pos) {
             const minX = Math.floor(pos.x - playerRadius);
             const maxX = Math.floor(pos.x + playerRadius);
-            const minY = Math.floor(pos.y);
-            const maxY = Math.floor(pos.y + playerHeight);
+            const minY = Math.floor(pos.y + 0.05);
+            const maxY = Math.floor(pos.y + playerHeight - 0.05);
             const minZ = Math.floor(pos.z - playerRadius);
             const maxZ = Math.floor(pos.z + playerRadius);
 
@@ -331,61 +296,95 @@
             const time = performance.now();
             
             if (controls.isLocked) {
-                const delta = (time - prevTime) / 1000;
+                const delta = Math.min((time - prevTime) / 1000, 0.1);
 
-                // プレイヤー周囲のチャンク管理を毎フレーム実行
                 updateChunks();
 
-                velocity.x -= velocity.x * 10.0 * delta;
-                velocity.z -= velocity.z * 10.0 * delta;
-                velocity.y -= 32.0 * delta;
-
+                // 【修正】キー入力から進行方向のフラグを設定
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
-                direction.normalize();
 
-                isMoving = false;
-                const moveSpeed = 40.0;
-                if (moveForward || moveBackward) { velocity.z -= direction.z * moveSpeed * delta; isMoving = true; }
-                if (moveLeft || moveRight) { velocity.x -= direction.x * moveSpeed * delta; isMoving = true; }
-
-                const nextPos = player.position.clone();
+                // 【バグ修正】プレイヤーオブジェクト（yawObject）の向きに基づいた正確な正面・真横のベクトルを取得
+                const moveVector = new THREE.Vector3();
                 
-                nextPos.x += (velocity.x * delta);
-                if (checkCollision(new THREE.Vector3(nextPos.x, player.position.y, player.position.z))) {
+                // yawObjectの正面方向を計算（Y軸の回転のみが反映された方向）
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion);
+                forward.y = 0; // 上下移動は無視
+                forward.normalize();
+
+                // yawObjectの真横方向を計算
+                const right = new THREE.Vector3(1, 0, 0).applyQuaternion(player.quaternion);
+                right.y = 0;
+                right.normalize();
+
+                // 正面入力と横入力を合成
+                moveVector.addScaledVector(forward, direction.z);
+                moveVector.addScaledVector(right, direction.x);
+                if (moveVector.length() > 0) moveVector.normalize();
+
+                isMoving = (moveForward || moveBackward || moveLeft || moveRight);
+                const moveSpeed = 5.0;
+
+                // 【修正】カメラの向いている方向の速度で、毎フレーム速度を完全に上書きする
+                if (isMoving) {
+                    velocity.x = moveVector.x * moveSpeed;
+                    velocity.z = moveVector.z * moveSpeed;
+                } else {
+                    // キーを離した時は滑らかに減速
+                    velocity.x -= velocity.x * 10.0 * delta;
+                    velocity.z -= velocity.z * 10.0 * delta;
+                }
+
+                // 重力加速
+                velocity.y -= 32.0 * delta;
+
+                // 1. X方向の移動
+                const targetPos = player.position.clone();
+                targetPos.x += velocity.x * delta;
+                if (!checkCollisionAt(targetPos)) {
+                    player.position.x = targetPos.x;
+                } else {
                     velocity.x = 0;
-                } else {
-                    player.position.x = nextPos.x;
                 }
 
-                nextPos.z += (velocity.z * delta);
-                if (checkCollision(new THREE.Vector3(player.position.x, player.position.y, nextPos.z))) {
+                // 2. Z方向の移動
+                targetPos.copy(player.position);
+                targetPos.z += velocity.z * delta;
+                if (!checkCollisionAt(targetPos)) {
+                    player.position.z = targetPos.z;
+                } else {
                     velocity.z = 0;
-                } else {
-                    player.position.z = nextPos.z;
                 }
 
-                player.position.y += (velocity.y * delta);
+                // 3. Y方向（垂直）の移動と接地判定
+                player.position.y += velocity.y * delta;
                 
-                // 接地・天井判定（キー検索版）
-                const playerFeet = player.position.clone();
-                const playerHead = player.position.clone(); playerHead.y += playerHeight;
-
-                if (checkCollision(playerFeet)) {
-                    if (velocity.y < 0) {
+                if (velocity.y <= 0) {
+                    const checkPos = player.position.clone();
+                    checkPos.y -= 0.01;
+                    if (checkCollisionAt(checkPos)) {
                         velocity.y = 0;
                         player.position.y = Math.ceil(player.position.y);
                         canJump = true;
+                    } else {
+                        canJump = false;
                     }
                 } else {
+                    const checkPos = player.position.clone();
+                    checkPos.y += 0.05;
+                    if (checkCollisionAt(checkPos)) {
+                        velocity.y = 0;
+                    }
                     canJump = false;
                 }
 
-                if (checkCollision(playerHead) && velocity.y > 0) {
-                    velocity.y = 0;
+                if (player.position.y < -30) {
+                    const currentH = getHeight(Math.floor(player.position.x), Math.floor(player.position.z));
+                    player.position.y = currentH + 5;
+                    velocity.set(0, 0, 0);
                 }
 
-                // ボビング振動
+                // ボビング振動（接地時のみ）
                 if (isMoving && canJump) {
                     bobbingTimer += delta * 14;
                     camera.position.y = 1.6 + Math.sin(bobbingTimer) * 0.04;
