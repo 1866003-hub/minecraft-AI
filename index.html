@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>簡易マイクラ - 物理と振動実装版</title>
+    <title>簡易マイクラ - ローカル完全対応版</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: sans-serif; background-color: #87CEEB; }
         #ui {
@@ -25,6 +25,11 @@
         #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; }
         #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; }
     </style>
+    <!-- 
+      【修正】古い形式のスクリプトタグでThree.jsを読み込みます。
+      これによりローカル環境でもCORSエラーを回避できます。
+    -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
     <div id="ui">
@@ -33,39 +38,78 @@
     </div>
     <div id="crosshair"></div>
 
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    <script>
+        // --- ローカル用のPointerLockControls（簡易自作版） ---
+        // 外部ファイルをインポートできないため、必要な視点移動の仕組みをここに直接書き込みました。
+        class SimpleControls {
+            constructor(camera, element) {
+                this.camera = camera;
+                this.element = element;
+                this.isLocked = false;
+                this.pitchObject = new THREE.Object3D();
+                this.pitchObject.add(camera);
+                this.yawObject = new THREE.Object3D();
+                this.yawObject.add(this.pitchObject);
+                
+                this.moveForward = false;
+                this.moveBackward = false;
+                this.moveLeft = false;
+                this.moveRight = false;
+
+                document.addEventListener('mousemove', (e) => this.onMouseMove(e));
+                element.addEventListener('click', () => this.lock());
+                document.addEventListener('pointerlockchange', () => this.onPointerLockChange());
+            }
+            getObject() { return this.yawObject; }
+            lock() { this.element.requestPointerLock(); }
+            onPointerLockChange() {
+                this.isLocked = document.pointerLockElement === this.element;
+                const ui = document.getElementById('ui');
+                const crosshair = document.getElementById('crosshair');
+                if (this.isLocked) {
+                    ui.style.display = 'none';
+                    crosshair.style.display = 'block';
+                } else {
+                    ui.style.display = 'block';
+                    crosshair.style.display = 'none';
+                }
+            }
+            onMouseMove(e) {
+                if (!this.isLocked) return;
+                const movementX = e.movementX || 0;
+                const movementY = e.movementY || 0;
+                this.yawObject.rotation.y -= movementX * 0.002;
+                this.pitchObject.rotation.x -= movementY * 0.002;
+                this.pitchObject.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitchObject.rotation.x));
+            }
+            moveRight(distance) {
+                this.yawObject.translateX(distance);
+            }
+            moveForward(distance) {
+                this.yawObject.translateZ(-distance);
             }
         }
-    </script>
 
-    <script type="module">
-        import * as THREE from 'three';
-        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-
-        // --- 基本設定 ---
+        // --- ゲームの基本設定 ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
         scene.fog = new THREE.Fog(0x87CEEB, 20, 100);
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         
-        // 【新規】カメラを直接動かさず、この「プレイヤーオブジェクト」を動かす
-        const player = new THREE.Object3D();
-        player.position.set(0, 10, 0); // 少し高い位置からスタート
-        player.add(camera); // カメラをプレイヤーに追加
-        scene.add(player);
-        camera.position.y = 1.6; // 目の高さ（プレイヤーの足元からの相対位置）
-
         const renderer = new THREE.WebGLRenderer({ antialias: false });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         document.body.appendChild(renderer.domElement);
 
-        // --- テクスチャ生成（前回と同じ） ---
+        // コントロールの適用（自作クラスを使用）
+        const controls = new SimpleControls(camera, document.body);
+        const player = controls.getObject();
+        player.position.set(0, 15, 0); // 空中からスタート！
+        scene.add(player);
+        camera.position.y = 1.6; // 目の高さ
+
+        // --- テクスチャ生成 ---
         function createDataTexture(pixels, width, height) {
             const data = new Uint8Array(pixels);
             const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
@@ -76,30 +120,17 @@
             return texture;
         }
 
-        const grassTopPixels = [];
-        for (let i = 0; i < 16 * 16; i++) {
-            const c = 90 + Math.random() * 50;
-            grassTopPixels.push(c * 0.6, c, c * 0.4, 255);
-        }
+        const grassTopPixels = []; for (let i = 0; i < 16 * 16; i++) { const c = 90 + Math.random() * 50; grassTopPixels.push(c * 0.6, c, c * 0.4, 255); }
         const grassTopTexture = createDataTexture(grassTopPixels, 16, 16);
 
-        const dirtPixels = [];
-        for (let i = 0; i < 16 * 16; i++) {
-            const c = 100 + Math.random() * 40;
-            dirtPixels.push(c, c * 0.7, c * 0.4, 255);
-        }
+        const dirtPixels = []; for (let i = 0; i < 16 * 16; i++) { const c = 100 + Math.random() * 40; dirtPixels.push(c, c * 0.7, c * 0.4, 255); }
         const dirtTexture = createDataTexture(dirtPixels, 16, 16);
 
         const grassSidePixels = [];
         for (let y = 0; y < 16; y++) {
             for (let x = 0; x < 16; x++) {
-                if (y < 4 + Math.random() * 2) {
-                    const c = 90 + Math.random() * 50;
-                    grassSidePixels.push(c * 0.6, c, c * 0.4, 255);
-                } else {
-                    const c = 100 + Math.random() * 40;
-                    grassSidePixels.push(c, c * 0.7, c * 0.4, 255);
-                }
+                if (y < 4 + Math.random() * 2) { const c = 90 + Math.random() * 50; grassSidePixels.push(c * 0.6, c, c * 0.4, 255); }
+                else { const c = 100 + Math.random() * 40; grassSidePixels.push(c, c * 0.7, c * 0.4, 255); }
             }
         }
         const grassSideTexture = createDataTexture(grassSidePixels, 16, 16);
@@ -119,17 +150,7 @@
         ground.rotation.x = -Math.PI / 2;
         scene.add(ground);
 
-        // --- コントロール ---
-        // 【修正】cameraではなくplayerをコントロール対象にする
-        const controls = new PointerLockControls(player, document.body);
-        const ui = document.getElementById('ui');
-        const crosshair = document.getElementById('crosshair');
-
-        ui.addEventListener('click', () => controls.lock());
-        controls.addEventListener('lock', () => { ui.style.display = 'none'; crosshair.style.display = 'block'; });
-        controls.addEventListener('unlock', () => { ui.style.display = 'block'; crosshair.style.display = 'none'; });
-
-        // --- ブロックマテリアルと設置処理 ---
+        // --- ブロック設定 ---
         const blockGeo = new THREE.BoxGeometry(1, 1, 1);
         const grassBlockMaterials = [
             new THREE.MeshLambertMaterial({ map: grassSideTexture }),
@@ -140,9 +161,8 @@
             new THREE.MeshLambertMaterial({ map: grassSideTexture })
         ];
 
-        // 衝突判定用に「地面」と「設置したブロック」を区別する
-        const objects = []; // 衝突判定を行うオブジェクト（設置ブロック）
-        const interactableObjects = [ground]; // クリック判定を行うオブジェクト
+        const objects = []; 
+        const interactableObjects = [ground]; 
 
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2(0, 0);
@@ -150,19 +170,18 @@
         document.addEventListener('mousedown', (event) => {
             if (!controls.isLocked) return;
             raycaster.setFromCamera(mouse, camera);
-            // クリック判定は地面も含める
             const intersects = raycaster.intersectObjects(interactableObjects);
 
             if (intersects.length > 0) {
                 const intersect = intersects[0];
-                if (event.button === 0) { // 左クリック：設置
+                if (event.button === 0) { 
                     const voxel = new THREE.Mesh(blockGeo, grassBlockMaterials);
                     voxel.position.copy(intersect.point).add(intersect.face.normal);
                     voxel.position.divideScalar(1).floor().multiplyScalar(1).addScalar(0.5);
                     scene.add(voxel);
-                    objects.push(voxel); // 衝突判定リストに追加
-                    interactableObjects.push(voxel); // クリック判定リストに追加
-                } else if (event.button === 2) { // 右クリック：破壊
+                    objects.push(voxel); 
+                    interactableObjects.push(voxel); 
+                } else if (event.button === 2) { 
                     if (intersect.object !== ground) {
                         scene.remove(intersect.object);
                         objects.splice(objects.indexOf(intersect.object), 1);
@@ -172,14 +191,13 @@
             }
         });
 
-        // --- 【新規】物理法則と移動の変数 ---
-        const velocity = new THREE.Vector3(); // プレイヤーの速度
-        const direction = new THREE.Vector3(); // 移動方向
+        // --- 物理法則と移動 ---
+        const velocity = new THREE.Vector3(); 
+        const direction = new THREE.Vector3(); 
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-        let canJump = false; // ジャンプ可能か（接地しているか）
-        let isMoving = false; // 動いているか（振動用）
+        let canJump = false; 
+        let isMoving = false; 
 
-        // プレイヤーの当たり判定サイズ
         const playerRadius = 0.4;
         const playerHeight = 1.8;
 
@@ -189,7 +207,7 @@
                 case 'KeyA': moveLeft = true; break;
                 case 'KeyS': moveBackward = true; break;
                 case 'KeyD': moveRight = true; break;
-                case 'Space': if (canJump) velocity.y += 15; canJump = false; break; // ジャンプ
+                case 'Space': if (canJump) velocity.y += 12; canJump = false; break; 
             }
         });
         document.addEventListener('keyup', (e) => {
@@ -201,66 +219,52 @@
             }
         });
 
-        // --- 【新規】衝突判定関数 ---
-        // プレイヤーが指定した位置(pos)に移動できるかチェックする
         function checkCollision(pos, sceneObjects) {
-            // 地面との判定（Y=0）
             if (pos.y < 0) return true;
-
-            // 設置されたブロックとの判定
             const playerBB = new THREE.Box3().setFromCenterAndSize(
                 new THREE.Vector3(pos.x, pos.y + playerHeight/2, pos.z),
                 new THREE.Vector3(playerRadius * 2, playerHeight, playerRadius * 2)
             );
-
             for (let i = 0; i < sceneObjects.length; i++) {
                 const objectBB = new THREE.Box3().setFromObject(sceneObjects[i]);
-                if (playerBB.intersectsBox(objectBB)) {
-                    return true; // 衝突した
-                }
+                if (playerBB.intersectsBox(objectBB)) return true;
             }
-            return false; // 衝突なし
+            return false;
         }
 
-        // --- アニメーションループ ---
+        // --- ループ処理 ---
         let prevTime = performance.now();
-        let bobbingTimer = 0; // 【新規】振動用タイマー
+        let bobbingTimer = 0; 
 
         function animate() {
             requestAnimationFrame(animate);
             const time = performance.now();
             
             if (controls.isLocked) {
-                const delta = (time - prevTime) / 1000; // 秒単位の経過時間
+                const delta = (time - prevTime) / 1000;
 
-                // 1. 重力と摩擦の計算
-                velocity.x -= velocity.x * 10.0 * delta; // 横方向の摩擦
-                velocity.z -= velocity.z * 10.0 * delta; // 横方向の摩擦
-                velocity.y -= 30.0 * delta; // 重力 (1秒間に-30)
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+                velocity.y -= 32.0 * delta; // 重力
 
-                // 2. 移動方向の決定
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
                 direction.normalize();
 
-                // 3. 速度の計算（歩く）
                 isMoving = false;
                 const moveSpeed = 40.0;
                 if (moveForward || moveBackward) { velocity.z -= direction.z * moveSpeed * delta; isMoving = true; }
                 if (moveLeft || moveRight) { velocity.x -= direction.x * moveSpeed * delta; isMoving = true; }
 
-                // 4. 【重要】衝突判定を含めた移動処理
                 const nextPos = player.position.clone();
                 
-                // --- X方向の移動と衝突 ---
                 nextPos.x += (velocity.x * delta);
                 if (checkCollision(new THREE.Vector3(nextPos.x, player.position.y, player.position.z), objects)) {
-                    velocity.x = 0; // 衝突したら速度をゼロに
+                    velocity.x = 0;
                 } else {
-                    player.position.x = nextPos.x; // 衝突しなければ移動
+                    player.position.x = nextPos.x;
                 }
 
-                // --- Z方向の移動と衝突 ---
                 nextPos.z += (velocity.z * delta);
                 if (checkCollision(new THREE.Vector3(player.position.x, player.position.y, nextPos.z), objects)) {
                     velocity.z = 0;
@@ -268,48 +272,40 @@
                     player.position.z = nextPos.z;
                 }
 
-                // --- Y方向（重力・ジャンプ）の移動と衝突 ---
                 player.position.y += (velocity.y * delta);
                 
-                // 接地判定（足元）
-                if (player.position.y < 0) { // 地面
+                if (player.position.y < 0) { 
                     velocity.y = 0;
                     player.position.y = 0;
                     canJump = true;
                 } else {
-                    // ブロックの上または下
                     const playerFeet = player.position.clone();
                     const playerHead = player.position.clone(); playerHead.y += playerHeight;
 
-                    // 足元の衝突（着地）
                     if (checkCollision(playerFeet, objects)) {
-                        if (velocity.y < 0) { // 落下中なら着地
+                        if (velocity.y < 0) { 
                             velocity.y = 0;
-                            // グリッドにスナップさせる処理（簡易版：最も近いブロックの上に置く）
                             player.position.y = Math.ceil(player.position.y); 
                             canJump = true;
                         }
                     } else {
-                        canJump = false; // 空中
+                        canJump = false;
                     }
 
-                    // 頭の衝突（天井にぶつかる）
                     if (checkCollision(playerHead, objects) && velocity.y > 0) {
-                        velocity.y = 0; // 上昇を止める
+                        velocity.y = 0;
                     }
                 }
 
-                // 5. 【新規】歩くときの振動（ボビング）
+                // 歩くときの振動（ボビング）
                 if (isMoving && canJump) {
-                    bobbingTimer += delta * 15; // 振動の速さ
-                    // サイン波を使ってカメラを上下左右に揺らす
-                    camera.position.y = 1.6 + Math.sin(bobbingTimer) * 0.05; // 上下
-                    camera.position.x = Math.sin(bobbingTimer * 0.5) * 0.02; // 左右
+                    bobbingTimer += delta * 14; 
+                    camera.position.y = 1.6 + Math.sin(bobbingTimer) * 0.04; 
+                    camera.position.x = Math.sin(bobbingTimer * 0.5) * 0.015; 
                 } else {
-                    // 止まっているときはカメラをゆっくり元に戻す
                     camera.position.y += (1.6 - camera.position.y) * 0.2;
                     camera.position.x += (0 - camera.position.x) * 0.2;
-                    if (!canJump) bobbingTimer = 0; // 空中ではタイマーリセット
+                    if (!canJump) bobbingTimer = 0;
                 }
             }
 
