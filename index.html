@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>簡易マイクラ</title>
+    <title>簡易マイクラ - 見た目修正版</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: sans-serif; }
         /* 画面中央のUI */
@@ -13,6 +13,7 @@
             text-align: center; color: white;
             background: rgba(0,0,0,0.7); padding: 30px;
             cursor: pointer; border-radius: 10px;
+            z-index: 10; /* 最前面に */
         }
         /* 照準（クロスヘア） */
         #crosshair {
@@ -20,6 +21,7 @@
             width: 20px; height: 20px;
             transform: translate(-50%, -50%);
             pointer-events: none; display: none;
+            z-index: 10;
         }
         #crosshair::before, #crosshair::after {
             content: ''; position: absolute; background: rgba(255, 255, 255, 0.8);
@@ -52,23 +54,76 @@
         // 1. シーンとカメラの準備
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB); // 空の色（水色）
-        scene.fog = new THREE.Fog(0x87CEEB, 10, 50); // 遠くを霞ませる
+        scene.fog = new THREE.Fog(0x87CEEB, 20, 100); // 遠くを霞ませる（少し範囲を広げた）
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: false }); // マイクラっぽくするためにアンチエイリアスをOFF
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio); // 解像度を合わせる
         document.body.appendChild(renderer.domElement);
 
+        // --- 【新規】テクスチャ（ドット絵）を生成する関数 ---
+        function createDataTexture(pixels, width, height) {
+            const data = new Uint8Array(pixels);
+            const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+            texture.magFilter = THREE.NearestFilter; // ドットをクッキリさせる（重要！）
+            texture.minFilter = THREE.NearestFilter;
+            texture.generateMipmaps = false; // パフォーマンスのため
+            texture.needsUpdate = true;
+            return texture;
+        }
+
+        // ドット絵データ（16x16ピクセル、RGBA）
+        // 1. 草ブロックの上（緑系）
+        const grassTopPixels = [];
+        for (let i = 0; i < 16 * 16; i++) {
+            const c = 90 + Math.random() * 50; // ランダムな緑
+            grassTopPixels.push(c * 0.6, c, c * 0.4, 255); // R, G, B, A
+        }
+        const grassTopTexture = createDataTexture(grassTopPixels, 16, 16);
+
+        // 2. 土（茶色系）
+        const dirtPixels = [];
+        for (let i = 0; i < 16 * 16; i++) {
+            const c = 100 + Math.random() * 40; // ランダムな茶色
+            dirtPixels.push(c, c * 0.7, c * 0.4, 255);
+        }
+        const dirtTexture = createDataTexture(dirtPixels, 16, 16);
+
+        // 3. 草ブロックの横（上部が緑、下部が茶色）
+        const grassSidePixels = [];
+        for (let y = 0; y < 16; y++) {
+            for (let x = 0; x < 16; x++) {
+                if (y < 4 + Math.random() * 2) { // 上部は草（少しギザギザに）
+                    const c = 90 + Math.random() * 50;
+                    grassSidePixels.push(c * 0.6, c, c * 0.4, 255);
+                } else { // 下部は土
+                    const c = 100 + Math.random() * 40;
+                    grassSidePixels.push(c, c * 0.7, c * 0.4, 255);
+                }
+            }
+        }
+        const grassSideTexture = createDataTexture(grassSidePixels, 16, 16);
+        // ----------------------------------------------------
+
         // 2. 光の設定
-        const light = new THREE.DirectionalLight(0xffffff, 1);
+        const light = new THREE.DirectionalLight(0xffffff, 1.2); // 少し明るく
         light.position.set(10, 20, 10);
         scene.add(light);
-        scene.add(new THREE.AmbientLight(0x606060));
+        scene.add(new THREE.AmbientLight(0x808080)); // 環境光も少し明るく
 
-        // 3. 地面を作る（緑色）
+        // 3. 地面を作る（草の上テクスチャを使用）
         const groundGeo = new THREE.PlaneGeometry(100, 100);
-        const groundMat = new THREE.MeshLambertMaterial({ color: 0x55aa55 });
+        
+        // 地面のテクスチャをリピートさせる設定
+        const groundTexture = grassTopTexture.clone();
+        groundTexture.wrapS = THREE.RepeatWrapping;
+        groundTexture.wrapT = THREE.RepeatWrapping;
+        groundTexture.repeat.set(100, 100); // 1マスごとにテクスチャを貼る
+        groundTexture.needsUpdate = true;
+
+        const groundMat = new THREE.MeshLambertMaterial({ map: groundTexture });
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.rotation.x = -Math.PI / 2;
         scene.add(ground);
@@ -92,12 +147,24 @@
 
         // 5. ブロックを置く・壊す処理
         const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2(0, 0); // 画面の中央（クロスヘアの位置）
+        const mouse = new THREE.Vector2(0, 0); // 画面の中央
         const blockGeo = new THREE.BoxGeometry(1, 1, 1);
-        const blockMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // 茶色（土ブロック風）
+        
+        // --- 【修正】草ブロック用のマテリアル（6面分） ---
+        // Three.jsのBoxGeometryのマテリアル順序：[+x, -x, +y, -y, +z, -z]
+        // つまり、[右, 左, 上, 下, 前, 後]
+        const grassBlockMaterials = [
+            new THREE.MeshLambertMaterial({ map: grassSideTexture }), // 右
+            new THREE.MeshLambertMaterial({ map: grassSideTexture }), // 左
+            new THREE.MeshLambertMaterial({ map: grassTopTexture }),  // 上
+            new THREE.MeshLambertMaterial({ map: dirtTexture }),      // 下
+            new THREE.MeshLambertMaterial({ map: grassSideTexture }), // 前
+            new THREE.MeshLambertMaterial({ map: grassSideTexture })  // 後
+        ];
+        // ----------------------------------------------------
+
         const interactableObjects = [ground]; // クリック判定するオブジェクトのリスト
 
-        // マウスの右・左クリック判定のためにmousedownイベントを使用
         document.addEventListener('mousedown', (event) => {
             if (!controls.isLocked) return;
             
@@ -108,17 +175,15 @@
                 const intersect = intersects[0];
 
                 if (event.button === 0) {
-                    // 左クリック：ブロックを置く
-                    const voxel = new THREE.Mesh(blockGeo, blockMat);
-                    // クリックした面の手前に配置
+                    // 左クリック：ブロックを置く（草ブロックを置くように変更）
+                    const voxel = new THREE.Mesh(blockGeo, grassBlockMaterials);
                     voxel.position.copy(intersect.point).add(intersect.face.normal);
-                    // グリッド（1マスのマス目）にスナップさせる計算
                     voxel.position.divideScalar(1).floor().multiplyScalar(1).addScalar(0.5);
                     scene.add(voxel);
                     interactableObjects.push(voxel);
                 } else if (event.button === 2) {
                     // 右クリック：ブロックを壊す
-                    if (intersect.object !== ground) { // 地面は壊せないようにする
+                    if (intersect.object !== ground) { // 地面は壊せない
                         scene.remove(intersect.object);
                         interactableObjects.splice(interactableObjects.indexOf(intersect.object), 1);
                     }
@@ -155,13 +220,12 @@
             const delta = (time - prevTime) / 1000;
 
             if (controls.isLocked) {
-                // 慣性の計算（滑りを少し残す）
                 velocity.x -= velocity.x * 10.0 * delta;
                 velocity.z -= velocity.z * 10.0 * delta;
 
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
-                direction.normalize(); // 斜め移動を一定速度にする
+                direction.normalize();
 
                 if (moveForward || moveBackward) velocity.z -= direction.z * 40.0 * delta;
                 if (moveLeft || moveRight) velocity.x -= direction.x * 40.0 * delta;
@@ -175,7 +239,6 @@
         }
         animate();
 
-        // ウィンドウサイズを変更したときの処理
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
