@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>簡易マイクラ - 視点移動バグ完全修正版</title>
+    <title>簡易マイクラ - 画面振動バグ完全修正版</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: sans-serif; background-color: #87CEEB; }
         #ui {
@@ -196,6 +196,7 @@
             delete chunks[chunkKey];
         }
 
+        // プレイヤーの動きに合わせて周辺の地形のみを作る
         function updateChunks() {
             const playerChunkX = Math.floor(player.position.x / CHUNK_SIZE);
             const playerChunkZ = Math.floor(player.position.z / CHUNK_SIZE);
@@ -269,11 +270,12 @@
             }
         });
 
+        // 衝突判定関数
         function checkCollisionAt(pos) {
             const minX = Math.floor(pos.x - playerRadius);
             const maxX = Math.floor(pos.x + playerRadius);
-            const minY = Math.floor(pos.y + 0.05);
-            const maxY = Math.floor(pos.y + playerHeight - 0.05);
+            const minY = Math.floor(pos.y);
+            const maxY = Math.floor(pos.y + playerHeight);
             const minZ = Math.floor(pos.z - playerRadius);
             const maxZ = Math.floor(pos.z + playerRadius);
 
@@ -300,24 +302,15 @@
 
                 updateChunks();
 
-                // 【修正】キー入力から進行方向のフラグを設定
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
 
-                // 【バグ修正】プレイヤーオブジェクト（yawObject）の向きに基づいた正確な正面・真横のベクトルを取得
                 const moveVector = new THREE.Vector3();
-                
-                // yawObjectの正面方向を計算（Y軸の回転のみが反映された方向）
                 const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion);
-                forward.y = 0; // 上下移動は無視
-                forward.normalize();
-
-                // yawObjectの真横方向を計算
+                forward.y = 0; forward.normalize();
                 const right = new THREE.Vector3(1, 0, 0).applyQuaternion(player.quaternion);
-                right.y = 0;
-                right.normalize();
+                right.y = 0; right.normalize();
 
-                // 正面入力と横入力を合成
                 moveVector.addScaledVector(forward, direction.z);
                 moveVector.addScaledVector(right, direction.x);
                 if (moveVector.length() > 0) moveVector.normalize();
@@ -325,20 +318,18 @@
                 isMoving = (moveForward || moveBackward || moveLeft || moveRight);
                 const moveSpeed = 5.0;
 
-                // 【修正】カメラの向いている方向の速度で、毎フレーム速度を完全に上書きする
                 if (isMoving) {
                     velocity.x = moveVector.x * moveSpeed;
                     velocity.z = moveVector.z * moveSpeed;
                 } else {
-                    // キーを離した時は滑らかに減速
                     velocity.x -= velocity.x * 10.0 * delta;
                     velocity.z -= velocity.z * 10.0 * delta;
                 }
 
-                // 重力加速
+                // 重力計算
                 velocity.y -= 32.0 * delta;
 
-                // 1. X方向の移動
+                // 1. X方向の移動・判定
                 const targetPos = player.position.clone();
                 targetPos.x += velocity.x * delta;
                 if (!checkCollisionAt(targetPos)) {
@@ -347,7 +338,7 @@
                     velocity.x = 0;
                 }
 
-                // 2. Z方向の移動
+                // 2. Z方向の移動・判定
                 targetPos.copy(player.position);
                 targetPos.z += velocity.z * delta;
                 if (!checkCollisionAt(targetPos)) {
@@ -356,26 +347,31 @@
                     velocity.z = 0;
                 }
 
-                // 3. Y方向（垂直）の移動と接地判定
+                // 3. 【バグ修正】Y方向の移動とブレのない接地処理
                 player.position.y += velocity.y * delta;
                 
-                if (velocity.y <= 0) {
-                    const checkPos = player.position.clone();
-                    checkPos.y -= 0.01;
-                    if (checkCollisionAt(checkPos)) {
+                if (checkCollisionAt(player.position)) {
+                    if (velocity.y < 0) {
+                        // 落下中にめり込んだら、ブロックの真上の位置にピタッと押し戻す
+                        player.position.y = Math.floor(player.position.y) + 1;
+                        // めり込み判定から完全に脱出させるため、ごくわずかに浮かす（これがブレ防止の肝）
+                        player.position.y += 0.001; 
                         velocity.y = 0;
-                        player.position.y = Math.ceil(player.position.y);
+                        canJump = true;
+                    } else if (velocity.y > 0) {
+                        // 天井にぶつかったら
+                        player.position.y = Math.floor(player.position.y);
+                        velocity.y = 0;
+                    }
+                } else {
+                    // 空中にいる場合、すぐ足元（0.01マス下）をスキャンして接地フラグを維持（フカフカしたブレを防ぐ）
+                    const downPos = player.position.clone();
+                    downPos.y -= 0.01;
+                    if (checkCollisionAt(downPos) && velocity.y <= 0) {
                         canJump = true;
                     } else {
                         canJump = false;
                     }
-                } else {
-                    const checkPos = player.position.clone();
-                    checkPos.y += 0.05;
-                    if (checkCollisionAt(checkPos)) {
-                        velocity.y = 0;
-                    }
-                    canJump = false;
                 }
 
                 if (player.position.y < -30) {
