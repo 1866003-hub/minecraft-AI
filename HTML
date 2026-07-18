@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ミニ・マイクラ風ゲーム</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #crosshair {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 10px; height: 10px;
+            transform: translate(-50%, -50%);
+            color: white; font-size: 20px;
+            pointer-events: none; user-select: none;
+        }
+        #instructions {
+            position: absolute; top: 10px; left: 10px;
+            color: white; background: rgba(0,0,0,0.5);
+            padding: 10px; border-radius: 5px; pointer-events: none;
+        }
+    </style>
+    <!-- Three.js と カメラ操作用のライブラリを読み込み -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+</head>
+<body>
+
+    <div id="crosshair">+</div>
+    <div id="instructions">
+        画面をクリックしてスタート<br>
+        【移動】W, A, S, D<br>
+        【操作】左クリック：ブロック破壊 / 右クリック：ブロック設置<br>
+        【解除】Escキー
+    </div>
+
+    <script>
+        // 1. 画面の基本設定（シーン、カメラ、レンダラー）
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // 空の色
+        scene.fog = new THREE.FogExp2(0x87CEEB, 0.05);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // 2. ライト（光）の追加
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(10, 20, 15);
+        scene.add(directionalLight);
+
+        // 3. マイクラ風の操作（マウスをロックしてFPS視点にする）
+        const controls = new THREE.PointerLockControls(camera, document.body);
+        document.body.addEventListener('click', () => { controls.lock(); });
+        controls.addEventListener('lock', () => { document.getElementById('instructions').style.display = 'none'; });
+        controls.addEventListener('unlock', () => { document.getElementById('instructions').style.display = 'block'; });
+
+        // 4. 地形の生成 (5x5x3のブロックの山を作ってみる)
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const material = new THREE.MeshLambertMaterial({ color: 0x559933 }); // 緑色
+        const objects = []; // 破壊・設置の判定用配列
+
+        for(let x = -5; x < 5; x++) {
+            for(let z = -5; z < 5; z++) {
+                // 簡単な起伏をつける
+                let height = Math.floor(Math.sin(x*0.5) * Math.cos(z*0.5) * 2) + 2;
+                for(let y = 0; y < height; y++) {
+                    const block = new THREE.Mesh(geometry, material);
+                    block.position.set(x, y, z);
+                    scene.add(block);
+                    objects.push(block);
+                }
+            }
+        }
+
+        // プレイヤーの初期位置
+        camera.position.set(0, 5, 5);
+
+        // 5. キーボード移動の処理
+        const move = { forward: false, backward: false, left: false, right: false };
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyW') move.forward = true;
+            if (e.code === 'KeyS') move.backward = true;
+            if (e.code === 'KeyA') move.left = true;
+            if (e.code === 'KeyD') move.right = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'KeyW') move.forward = false;
+            if (e.code === 'KeyS') move.backward = false;
+            if (e.code === 'KeyA') move.left = false;
+            if (e.code === 'KeyD') move.right = false;
+        });
+
+        // 6. ブロックの破壊と設置（レイキャスターを使用）
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(0, 0); // 画面中央
+
+        window.addEventListener('mousedown', (e) => {
+            if (!controls.isLocked) return;
+
+            // 画面中央から正面に光線を飛ばして当たったブロックを探す
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(objects);
+
+            if (intersects.length > 0 && intersects[0].distance < 4) {
+                const hit = intersects[0];
+                
+                if (e.button === 0) { // 左クリック：破壊
+                    scene.remove(hit.object);
+                    objects.splice(objects.indexOf(hit.object), 1);
+                } 
+                else if (e.button === 2) { // 右クリック：設置
+                    const block = new THREE.Mesh(geometry, material);
+                    // 当たった面の法線（向き）に合わせて隣にブロックを配置
+                    block.position.copy(hit.object.position).add(hit.face.normal);
+                    scene.add(block);
+                    objects.push(block);
+                }
+            }
+        });
+        // 右クリックメニューを禁止
+        window.addEventListener('contextmenu', e => e.preventDefault());
+
+        // 7. ゲームループ（毎フレーム実行される処理）
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (controls.isLocked) {
+                const delta = clock.getDelta();
+                
+                // 減速（摩擦のようなもの）
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                // 移動方向の計算
+                direction.z = Number(move.forward) - Number(move.backward);
+                direction.x = Number(move.right) - Number(move.left);
+                direction.normalize();
+
+                if (move.forward || move.backward) velocity.z -= direction.z * 40.0 * delta;
+                if (move.left || move.right) velocity.x -= direction.x * 40.0 * delta;
+
+                // カメラの座標を更新
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // 画面サイズ変更への対応
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
