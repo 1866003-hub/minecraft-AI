@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>簡易マイクラ</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        /* 画面中央のUI */
+        #ui {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center; color: white;
+            background: rgba(0,0,0,0.7); padding: 30px;
+            cursor: pointer; border-radius: 10px;
+        }
+        /* 照準（クロスヘア） */
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 20px; height: 20px;
+            transform: translate(-50%, -50%);
+            pointer-events: none; display: none;
+        }
+        #crosshair::before, #crosshair::after {
+            content: ''; position: absolute; background: rgba(255, 255, 255, 0.8);
+        }
+        #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; }
+        #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h2>クリックしてプレイ開始</h2>
+        <p>W,A,S,Dキー：移動<br>マウス：視点移動<br>左クリック：ブロックを置く<br>右クリック：ブロックを壊す</p>
+    </div>
+    <div id="crosshair"></div>
+
+    <!-- Three.jsを読み込むための設定 -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // 1. シーンとカメラの準備
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // 空の色（水色）
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 50); // 遠くを霞ませる
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // 2. 光の設定
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(10, 20, 10);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x606060));
+
+        // 3. 地面を作る（緑色）
+        const groundGeo = new THREE.PlaneGeometry(100, 100);
+        const groundMat = new THREE.MeshLambertMaterial({ color: 0x55aa55 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        // 4. FPS視点のコントロール設定
+        const controls = new PointerLockControls(camera, document.body);
+        const ui = document.getElementById('ui');
+        const crosshair = document.getElementById('crosshair');
+
+        ui.addEventListener('click', () => controls.lock());
+        controls.addEventListener('lock', () => {
+            ui.style.display = 'none';
+            crosshair.style.display = 'block';
+        });
+        controls.addEventListener('unlock', () => {
+            ui.style.display = 'block';
+            crosshair.style.display = 'none';
+        });
+        scene.add(controls.getObject());
+        controls.getObject().position.y = 1.6; // プレイヤーの目の高さ
+
+        // 5. ブロックを置く・壊す処理
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(0, 0); // 画面の中央（クロスヘアの位置）
+        const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+        const blockMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // 茶色（土ブロック風）
+        const interactableObjects = [ground]; // クリック判定するオブジェクトのリスト
+
+        // マウスの右・左クリック判定のためにmousedownイベントを使用
+        document.addEventListener('mousedown', (event) => {
+            if (!controls.isLocked) return;
+            
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(interactableObjects);
+
+            if (intersects.length > 0) {
+                const intersect = intersects[0];
+
+                if (event.button === 0) {
+                    // 左クリック：ブロックを置く
+                    const voxel = new THREE.Mesh(blockGeo, blockMat);
+                    // クリックした面の手前に配置
+                    voxel.position.copy(intersect.point).add(intersect.face.normal);
+                    // グリッド（1マスのマス目）にスナップさせる計算
+                    voxel.position.divideScalar(1).floor().multiplyScalar(1).addScalar(0.5);
+                    scene.add(voxel);
+                    interactableObjects.push(voxel);
+                } else if (event.button === 2) {
+                    // 右クリック：ブロックを壊す
+                    if (intersect.object !== ground) { // 地面は壊せないようにする
+                        scene.remove(intersect.object);
+                        interactableObjects.splice(interactableObjects.indexOf(intersect.object), 1);
+                    }
+                }
+            }
+        });
+
+        // 6. 移動処理（W,A,S,D）
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+
+        document.addEventListener('keydown', (e) => {
+            switch(e.code) {
+                case 'KeyW': moveForward = true; break;
+                case 'KeyA': moveLeft = true; break;
+                case 'KeyS': moveBackward = true; break;
+                case 'KeyD': moveRight = true; break;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            switch(e.code) {
+                case 'KeyW': moveForward = false; break;
+                case 'KeyA': moveLeft = false; break;
+                case 'KeyS': moveBackward = false; break;
+                case 'KeyD': moveRight = false; break;
+            }
+        });
+
+        let prevTime = performance.now();
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
+
+            if (controls.isLocked) {
+                // 慣性の計算（滑りを少し残す）
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize(); // 斜め移動を一定速度にする
+
+                if (moveForward || moveBackward) velocity.z -= direction.z * 40.0 * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * 40.0 * delta;
+
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+            }
+
+            renderer.render(scene, camera);
+            prevTime = time;
+        }
+        animate();
+
+        // ウィンドウサイズを変更したときの処理
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
